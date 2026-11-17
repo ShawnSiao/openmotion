@@ -99,10 +99,14 @@ export async function verifyExport(filename: string, expectation: number | Expor
     `nominal=${video[0]?.r_frame_rate}; average=${video[0]?.avg_frame_rate}`);
   check('audio', (expected.audio === 'silent' ? audio.length === 0 : expected.audio === 'required' ? audio.length > 0 : true)
     && audio.every((stream: any) => stream.codec_name === 'aac'), `${audio.length} audio stream(s); policy=${expected.audio}; codecs=${audio.map((stream: any) => stream.codec_name).join(',')}`);
-  const seconds = Number(video[0]?.duration ?? probe.format?.duration);
+  const containerSeconds = Number(probe.format?.duration ?? NaN);
+  const seconds = Number(video[0]?.duration ?? containerSeconds);
   const tolerance = Math.max(0.1, 1 / fps);
-  check('duration', Number.isFinite(seconds) && Math.abs(seconds - expectedDuration) <= tolerance + 1e-6,
-    `actual=${seconds}s; expected=${expectedDuration}s; tolerance=${tolerance}s`);
+  const withinTolerance = (duration: number) => Number.isFinite(duration) && Math.abs(duration - expectedDuration) <= tolerance + 1e-6;
+  const hasContainerDuration = Number.isFinite(containerSeconds);
+  const containerDetails = hasContainerDuration ? `; container=${containerSeconds}s` : '';
+  check('duration', withinTolerance(seconds) && (!hasContainerDuration || withinTolerance(containerSeconds)),
+    `actual=${seconds}s; expected=${expectedDuration}s; tolerance=${tolerance}s${containerDetails}`);
 
   try {
     const decoded = await checkedRun(binaries.ffmpeg, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-xerror', '-err_detect', 'explode',

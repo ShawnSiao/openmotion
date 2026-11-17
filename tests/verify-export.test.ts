@@ -17,9 +17,9 @@ async function fixture(run: (directory: string) => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), 'motion-verify-'));
   try { await run(directory); } finally { await rm(directory, { recursive: true, force: true }); }
 }
-function clip(file: string, size = '320x180', fps = '30', audio = false) {
+function clip(file: string, size = '320x180', fps = '30', audioDuration?: number) {
   const result = spawnSync(binaries.ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
-    `testsrc2=s=${size}:r=${fps}:d=1`, ...(audio ? ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-c:a', 'aac'] : ['-an']),
+    `testsrc2=s=${size}:r=${fps}:d=1`, ...(audioDuration === undefined ? ['-an'] : ['-f', 'lavfi', '-i', `sine=frequency=440:duration=${audioDuration}`, '-c:a', 'aac']),
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-y', file], { timeout: 30_000 });
   assert.equal(result.status, 0, result.stderr?.toString());
 }
@@ -83,12 +83,26 @@ test('soundtracks are decoded and required/silent audio policies cannot silently
   const silent = path.join(directory, 'silent.mp4'); clip(silent);
   const required = await verifyExport(silent, { ...spec, audio: 'required' });
   assert.equal(required.status, 'failed'); assert.equal(required.checks.find(c => c.name === 'audio')?.status, 'failed');
-  const audible = path.join(directory, 'audible.mp4'); clip(audible, '320x180', '30', true);
+  const audible = path.join(directory, 'audible.mp4'); clip(audible, '320x180', '30', 1);
   const report = await verifyExport(audible, { ...spec, audio: 'required' });
   assert.equal(report.status, 'passed', JSON.stringify(report));
   assert.equal(report.checks.find(c => c.name === 'full-decode')?.status, 'passed');
   const forbidden = await verifyExport(audible, spec);
   assert.equal(forbidden.status, 'failed'); assert.equal(forbidden.checks.find(c => c.name === 'audio')?.status, 'failed');
+}));
+
+test('MP4 duration includes audio beyond the video stream', { skip: !available }, () => fixture(async directory => {
+  const expected: ExportExpectation = { ...spec, audio: 'required' };
+  const withinTolerance = path.join(directory, 'within-tolerance.mp4');
+  clip(withinTolerance, '320x180', '30', 1.05);
+  const valid = await verifyExport(withinTolerance, expected);
+  assert.equal(valid.status, 'passed', JSON.stringify(valid));
+
+  const overlong = path.join(directory, 'overlong.mp4');
+  clip(overlong, '320x180', '30', 6);
+  const report = await verifyExport(overlong, expected);
+  assert.equal(report.checks.find(c => c.name === 'duration')?.status, 'failed', JSON.stringify(report));
+  assert.equal(report.status, 'failed');
 }));
 
 test('MCP verification binds job ID/revision and preserves snapshot specifications across later edits', { skip: !available }, () => fixture(async directory => {
